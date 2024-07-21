@@ -32,12 +32,13 @@ Controller: .res 1
 Controller_Old: .res 1
 Controller_Pressed: .res 1
 
+TmpA: .res 1
+TmpB: .res 1
 TmpX: .res 1
 TmpY: .res 1
 TmpZ: .res 1
 
 TableSelect: .res 1
-AttrBuffer: .res 64
 
 ptrTable: .res 2
 ptrRow: .res 2
@@ -48,6 +49,10 @@ ptrCell: .res 2
 ptrInspect: .res 2
 
 Neighbors: .res 1
+
+CoordX: .res 1
+CoordY: .res 1
+CurrentAlive: .res 1
 
 ; X/Y coords of cells around the
 ; cell being inspected
@@ -61,11 +66,17 @@ NeighborsY: .res 8
 Tick: .res 1
 UpdateReady: .res 1
 
+SwapReady:  .res 1
+BufferAddr: .res 2
+TileBuffer: .res 32
+
 .segment "OAM"
 .segment "BSS"
 
-TableA: .res 240
-TableB: .res 240
+SmTableA: .res 120
+SmTableB: .res 120
+
+AttrBuffer: .res 64
 
 .segment "CHR0"
 .incbin "main.chr"
@@ -73,24 +84,29 @@ TableB: .res 240
 .segment "PAGE0"
 
 Palettes:
-    .byte $0F, $0F, $20, $00
-    .byte $0F, $20, $20, $00
-    .byte $0F, $10, $20, $00
-    .byte $0F, $10, $20, $00
-
     .byte $0F, $10, $20, $00
     .byte $0F, $10, $20, $00
     .byte $0F, $10, $20, $00
     .byte $0F, $10, $20, $00
 
-RowOffsetsA:
-    .repeat 15, i
-    .word (i*16)+TableA
+    .byte $0F, $10, $20, $00
+    .byte $0F, $10, $20, $00
+    .byte $0F, $10, $20, $00
+    .byte $0F, $10, $20, $00
+
+CellMasks:
+    .repeat 8, i
+    .byte 1 << (7-i)
     .endrepeat
 
-RowOffsetsB:
-    .repeat 15, i
-    .word (i*16)+TableB
+CellMasksInvert:
+    .repeat 8, i
+    .byte (1 << (7-i)) ^ $FF
+    .endrepeat
+
+PpuRows:
+    .repeat 32, i
+    .word $2000+(i*32)
     .endrepeat
 
 ReadControllers:
@@ -137,22 +153,43 @@ NMI:
     lda #$FF
     sta Sleeping
 
-    lda UpdateReady
+    lda BufferAddr+1
     bne :+
-    jmp @nope
+    jmp @noBuffer
 :
+    sta $2006
+    lda BufferAddr+0
+    sta $2006
 
-    lda #$23
-    sta $2006
-    lda #$C0
-    sta $2006
-    .repeat 64, i
-    lda AttrBuffer+i
+    .repeat 32, i
+    lda TileBuffer+i
     sta $2007
     .endrepeat
-@nope:
+
+@noBuffer:
+
     lda #0
-    sta UpdateReady
+    sta BufferAddr+0
+    sta BufferAddr+1
+
+    lda SwapReady
+    beq :+
+    lda #0
+    sta SwapReady
+    lda TableSelect
+    eor #$FF
+    sta TableSelect
+:
+
+    lda TableSelect
+    bne @tableB
+    lda #$88
+    sta $2000
+    jmp @selectDone
+@tableB:
+    lda #$89
+    sta $2000
+@selectDone:
 
     lda #0
     sta $2005
@@ -212,39 +249,11 @@ RESET:
     sta $2007
     .endrepeat
 
-    ; draw initial cell grid thing
-    lda #$20
+; clear attribtutes
+    lda #$23
     sta $2006
-    lda #$00
+    lda #$C0
     sta $2006
-
-    lda #15
-    sta TmpX
-
-@outer:
-    lda #0
-    ldy #1
-
-    ldx #16
-:
-    sta $2007
-    sty $2007
-    dex
-    bne :-
-
-    lda #2
-    ldy #3
-
-    ldx #16
-:
-    sta $2007
-    sty $2007
-    dex
-    bne :-
-
-    dec TmpX
-    bne @outer
-
     lda #0
     ldx #64
 :
@@ -252,32 +261,67 @@ RESET:
     dex
     bne :-
 
-;    ldx #0
-;    lda #$FF
-;    ldy #16*2
-;:
-;    sta TableA+1, x
-;    inx
-;    inx
-;    dey
-;    bne :-
+    lda #$27
+    sta $2006
+    lda #$C0
+    sta $2006
+    lda #0
+    ldx #64
+:
+    sta $2006
+    dex
+    bne :-
 
+; initial state
 ; ..X
 ; X.X
 ; .XX
+    lda TableSelect
+    beq :+
+    lda #.lobyte(SmTableA)
+    sta ptrCurrent+0
+    lda #.hibyte(SmTableA)
+    sta ptrCurrent+1
 
-    lda #$FF
-    ;           Row
-    sta TableA+(16*0)+2
-    sta TableA+(16*1)+2
-    sta TableA+(16*2)+2
-    sta TableA+(16*2)+1
-    sta TableA+(16*1)+0
+    lda #.lobyte(SmTableB)
+    sta ptrNext+0
+    lda #.hibyte(SmTableB)
+    sta ptrNext+1
+    jmp :++
+:
+    lda #.lobyte(SmTableA)
+    sta ptrNext+0
+    lda #.hibyte(SmTableA)
+    sta ptrNext+1
 
-    ;lda #1
-    ;sta TableA+49
-    ;sta TableA+50
-    ;sta TableA+51
+    lda #.lobyte(SmTableB)
+    sta ptrCurrent+0
+    lda #.hibyte(SmTableB)
+    sta ptrCurrent+1
+:
+
+    lda #1
+    sta CurrentAlive
+
+    ldx #2
+    ldy #0
+    jsr SetCell
+
+    ldx #2
+    ldy #1
+    jsr SetCell
+
+    ldx #2
+    ldy #2
+    jsr SetCell
+
+    ldx #1
+    ldy #2
+    jsr SetCell
+
+    ldx #0
+    ldy #1
+    jsr SetCell
 
     lda #$88
     sta $2000
@@ -285,73 +329,55 @@ RESET:
     lda #$0A
     sta $2001
 
-    ;lda #15
-    ;sta Tick
+    lda #0
+    sta CoordX
+    sta CoordY
 
 ResetFrame:
-    ;dec Tick
-    ;bne :+
-    jsr UpdateTable
-;:
-    jsr BufferTable
+    jsr SmUpdate
+    jsr SmBuffer
     jsr WaitForNMI
     jmp ResetFrame
 
-UpdateTable:
-
-    ; select the correct table
+SmUpdate:
     lda TableSelect
     beq :+
-    lda #.lobyte(RowOffsetsB)
+    lda #.lobyte(SmTableB)
     sta ptrCurrent+0
-    lda #.hibyte(RowOffsetsB)
+    lda #.hibyte(SmTableB)
     sta ptrCurrent+1
 
-    lda #.lobyte(RowOffsetsA)
+    lda #.lobyte(SmTableA)
     sta ptrNext+0
-    lda #.hibyte(RowOffsetsA)
+    lda #.hibyte(SmTableA)
     sta ptrNext+1
     jmp :++
 :
-    lda #.lobyte(RowOffsetsB)
+    lda #.lobyte(SmTableB)
     sta ptrNext+0
-    lda #.hibyte(RowOffsetsB)
+    lda #.hibyte(SmTableB)
     sta ptrNext+1
 
-    lda #.lobyte(RowOffsetsA)
+    lda #.lobyte(SmTableA)
     sta ptrCurrent+0
-    lda #.hibyte(RowOffsetsA)
+    lda #.hibyte(SmTableA)
     sta ptrCurrent+1
 :
 
-    lda TableSelect
-    eor #$FF
-    sta TableSelect
 
-    ldy #0
-    sty TmpY    ; current row
-    sty TmpX    ; current column
-@cell:
-    ; get current cell's addr
-    lda TmpY
-    asl a
-    tay
-    lda (ptrCurrent), y
-    sta ptrCell+0
-    iny
-    lda (ptrCurrent), y
-    sta ptrCell+1
+@chunkLoop:
+    lda #0
+    sta CurrentAlive
 
-    clc
-    lda ptrCell+0
-    adc TmpX
-    sta ptrCell+0
+    ldx CoordX
+    ldy CoordY
+    jsr GetCell ; returns non-zero if cell is alive.
+    beq :+
+    lda #1
+    sta CurrentAlive
+:
 
-    lda ptrCell+1
-    adc #0
-    sta ptrCell+1
-
-    ldx TmpY
+    ldx CoordY
     beq @wrapAbove
     dex
     stx NeighborsY+0
@@ -359,19 +385,19 @@ UpdateTable:
     stx NeighborsY+2
     jmp @aboveDone
 @wrapAbove:
-    lda #14
+    lda #29
     sta NeighborsY+0
     sta NeighborsY+1
     sta NeighborsY+2
 @aboveDone:
 
     ; middle row
-    lda TmpY
+    lda CoordY
     sta NeighborsY+3
     sta NeighborsY+4
 
-    ldx TmpY
-    cpx #14
+    ldx CoordY
+    cpx #29
     beq @wrapBelow
     inx
     stx NeighborsY+5
@@ -385,7 +411,7 @@ UpdateTable:
     stx NeighborsY+7
 @belowDone:
 
-    ldx TmpX
+    ldx CoordX
     beq @wrapLeft
     dex
     stx NeighborsX+0
@@ -393,19 +419,19 @@ UpdateTable:
     stx NeighborsX+5
     jmp @leftDone
 @wrapLeft:
-    ldx #15
+    ldx #31
     stx NeighborsX+0
     stx NeighborsX+3
     stx NeighborsX+5
 @leftDone:
 
     ; middle column
-    lda TmpX
+    lda CoordX
     sta NeighborsX+1
     sta NeighborsX+6
 
-    ldx TmpX
-    cpx #15
+    ldx CoordX
+    cpx #31
     beq @wrapRight
     inx
     stx NeighborsX+2
@@ -421,206 +447,235 @@ UpdateTable:
 
     ldx #0
     stx Neighbors
-@loop:
-    jsr InspectCell
-    inx
-    cpx #8
-    bne @loop
+    stx TmpZ
+@neighborLoop:
+    ldx TmpZ
+    ldy NeighborsY, x
+    sty TmpY
 
-    lda TmpY
-    asl a
-    tay
-    clc
-    lda (ptrNext), y
-    adc TmpX
-    sta ptrInspect+0
-    iny
-    lda (ptrNext), y
-    adc #0
-    sta ptrInspect+1
+    ldx TmpZ
+    ldy NeighborsX, x
+    tya
+    tax
+    ldy TmpY
+
+    jsr GetCell
+    beq :+
+    inc Neighbors
+:
+    inc TmpZ
+    lda TmpZ
+    cmp #8
+    bne @neighborLoop
 
     ; cell modifications
-    ldy #0
-    lda (ptrCell), y
+    lda CurrentAlive
     beq @dead
 
     lda Neighbors
     cmp #2
     bcs :+
-    ; kill it
+    ; kill
     lda #0
-    sta (ptrInspect), y
+    sta CurrentAlive
+    ldy CoordY
+    ldx CoordX
+    jsr SetCell
     jmp @cellDone
 :
 
     cmp #4
     bcc :+
-    ; kill it
+    ; kill
     lda #0
-    sta (ptrInspect), y
+    sta CurrentAlive
+    ldy CoordY
+    ldx CoordX
+    jsr SetCell
     jmp @cellDone
 :
 
-    lda #$FF
-    sta (ptrInspect), y
-    jmp @cellDone
+    ; no change
+    ldy CoordY
+    ldx CoordX
+    jsr SetCell
 
 @dead:
     lda Neighbors
     cmp #3
     bne :+
-    ; revive it
-    lda #$FF
-    sta (ptrInspect), y
+    ; revive
+    lda #1
+    sta CurrentAlive
+    ldy CoordY
+    ldx CoordX
+    jsr SetCell
     jmp @cellDone
 :
-    lda #0
-    sta (ptrInspect), y
+
+    ; no change
+    ldy CoordY
+    ldx CoordX
+    jsr SetCell
 
 @cellDone:
-    inc TmpX
-    lda TmpX
-    cmp #16
-    bne @nextCell
-
+    inc CoordX
+    lda CoordX
+    cmp #32
+    bne @noX
     lda #0
-    sta TmpX
-    inc TmpY
-    lda TmpY
-    cmp #15
-    bne @nextCell
+    sta CoordX
+    inc CoordY
+    lda CoordY
+    cmp #30
+    bne :+
+    lda #0
+    sta CoordY
+:   jmp @exitLoop
+@noX:
+    jmp @chunkLoop
+
+@exitLoop:
     rts
 
-@nextCell:
-    jmp @cell
+; X&Y coordinates in X&Y registers
+GetCell:
+    ;lda CoordY ; CoordY*4
+    tya
+    asl a
+    asl a
+    tay ; start of row offset from beginning of table
 
-; Inspect a cell and increment Neghbors
-; if something is found
-InspectCell:
-    lda NeighborsY, x
+    ;lda CoordX ; CoordX/8
+    txa
+    lsr a
+    lsr a
+    lsr a
+    sta TmpX
+    tya
+    clc
+    adc TmpX ; Offset of byte for current cell
+    tay
+
+    ;lda CoorX
+    txa
+    and #$07 ; %0000_0111
+    tax
+
+    lda (ptrCurrent), y
+    and CellMasks, x
+    rts
+
+; X&Y coordinates in X&Y registers
+SetCell:
+    ;lda CoordY ; CoordY*4
+    tya
+    asl a
+    asl a
+    tay ; start of row offset from beginning of table
+
+    ;lda CoordX ; CoordX/8
+    txa
+    lsr a
+    lsr a
+    lsr a
+    sta TmpX
+    tya
+    clc
+    adc TmpX ; Offset of byte for current cell
+    tay
+
+    ;lda CoorX
+    txa
+    and #$07 ; %0000_0111
+    tax
+
+
+    lda CurrentAlive
+    beq @dead
+
+    lda CellMasks, x
+    ora (ptrNext), y
+    jmp @set
+
+@dead:
+    lda CellMasksInvert, x
+    and (ptrNext), y
+
+@set:
+    sta (ptrNext), y
+    rts
+
+TileON  = $01
+TileOFF = $00
+SmBuffer:
+    ; loop over prev row
+    ldy CoordY
+    dey
+    bpl :+
+    ldy #29
+:
+
+    lda #0
+    sta TmpA
+    sty TmpB
+
+    tya
     asl a
     tay
+
+    lda PpuRows+0, y
+    sta BufferAddr+0
+    lda PpuRows+1, y
+    sta BufferAddr+1
+
+    lda TableSelect
+    bne :+
     clc
-    lda (ptrCurrent), y
-    adc NeighborsX, x
-    sta ptrInspect+0
-    iny
-    lda (ptrCurrent), y
+    lda BufferAddr+1
+    adc #$04
+    sta BufferAddr+1
+
+    lda BufferAddr+0
     adc #0
-    sta ptrInspect+1
-
-    ldy #0
-    lda (ptrInspect), y
-    beq :+
-    inc Neighbors
+    sta BufferAddr+0
 :
-    rts
 
-ATTR_TopLeft  = %0000_0011
-ATTR_TopRight = %0000_1100
-ATTR_BotLeft  = %0011_0000
-ATTR_BotRight = %1100_0000
-
-; Read a full table and fill the attribute buffer
-BufferTable:
-    lda #0
-    ldx #.sizeof(AttrBuffer)-1
-:
-    sta AttrBuffer, x
-    dex
-    bpl :-
-
-    ; select the correct table
     lda TableSelect
     beq :+
-    lda #.lobyte(RowOffsetsB)
-    sta ptrTable+0
-    lda #.hibyte(RowOffsetsB)
-    sta ptrTable+1
+    lda #.lobyte(SmTableA)
+    sta ptrCurrent+0
+    lda #.hibyte(SmTableA)
+    sta ptrCurrent+1
     jmp :++
 :
-    lda #.lobyte(RowOffsetsA)
-    sta ptrTable+0
-    lda #.hibyte(RowOffsetsA)
-    sta ptrTable+1
+    lda #.lobyte(SmTableB)
+    sta ptrCurrent+0
+    lda #.hibyte(SmTableB)
+    sta ptrCurrent+1
 :
 
-    ldy #0
-    ldx #0
-@newRow:
-    sty TmpY
-    ; get a pointer to the row
-    lda (ptrTable), y
-    sta ptrRow+0
-    iny
-    lda (ptrTable), y
-    sta ptrRow+1
+@loop:
+    ldx TmpA
+    ldy TmpB
+    jsr GetCell
+    beq @off
+    lda #TileON
+    jmp @set
+@off:
+    lda #TileOFF
 
-    ldy #0
-    lda #8
-    sta TmpZ
-@row:
-    lda #0
-    sta TmpX
-
-    tya
-    pha
-    ; top left
-    lda (ptrRow), y
-    beq :+
-    lda #ATTR_TopLeft
-    sta TmpX
-:
-
-    ; top right
-    iny
-    lda (ptrRow), y
-    beq :+
-    lda #ATTR_TopRight
-    ora TmpX
-    sta TmpX
-:
-
-    ; bottom left
-    tya
-    clc
-    adc #15
-    tay
-    lda (ptrRow), y
-    beq :+
-    lda #ATTR_BotLeft
-    ora TmpX
-    sta TmpX
-:
-
-    ; bottom right
-    iny
-    lda (ptrRow), y
-    beq :+
-    lda #ATTR_BotRight
-    ora TmpX
-    sta TmpX
-:
-    pla
-    tay
-    iny
-    iny
-
-    lda TmpX
-    sta AttrBuffer, x
+@set:
+    ldx TmpA
+    sta TileBuffer, x
     inx
-    dec TmpZ
-    bne @row
+    stx TmpA
+    cpx #32
+    bne @loop
 
-    ldy TmpY
-    iny
-    iny
-    iny
-    iny
-    cpy #32
-    bne @newRow
-
+    lda CoordY
+    bne :+
     lda #1
-    sta UpdateReady
-
+    sta SwapReady
+:
     rts
