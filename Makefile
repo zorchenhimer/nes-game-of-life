@@ -12,7 +12,7 @@ LDFLAGS = -C $(NESCFG) --dbgfile bin/$(NAME).dbg -m bin/$(NAME).map
 SOURCES = \
 	main.asm
 
-CHR = main.chr
+CHR = images/main.chr
 
 all: bin/ bin/$(NAME).nes
 
@@ -25,7 +25,7 @@ bin/%.nes: bin/%.o
 bin/%.o: $(SOURCES) $(CHR)
 	ca65 $(CAFLAGS) -o $@ main.asm
 
-%.chr: images/%.bmp
+images/%.chr: images/%.bmp
 	$(CHRUTIL) $< -o $@
 
 images/%.bmp: images/%.aseprite

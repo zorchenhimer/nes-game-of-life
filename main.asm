@@ -79,7 +79,7 @@ SmTableB: .res 120
 AttrBuffer: .res 64
 
 .segment "CHR0"
-.incbin "main.chr"
+.incbin "images/main.chr"
 
 .segment "PAGE0"
 
