@@ -16,6 +16,9 @@ CHR = images/main.chr
 
 all: bin/ bin/$(NAME).nes
 
+send: all
+	./edlink bin/$(NAME).nes
+
 bin/:
 	-mkdir bin
 

@@ -1,3 +1,9 @@
+;
+; TODO:
+;   precalculate these for each cell:
+;   NeighborCells - byte offset for cell
+;   NeighborMasks - mask for cell
+
 .include "nes2header.inc"
 nes2mapper 0
 nes2prg 16 * 1024
@@ -66,17 +72,16 @@ NeighborsY: .res 8
 Tick: .res 1
 UpdateReady: .res 1
 
-SwapReady:  .res 1
-BufferAddr: .res 2
-TileBuffer: .res 32
+SwapReady:   .res 1
+BufferReady: .res 1
+BufferAddr:  .res 2
+TileBuffer:  .res 32
 
 .segment "OAM"
 .segment "BSS"
 
 SmTableA: .res 120
 SmTableB: .res 120
-
-AttrBuffer: .res 64
 
 .segment "CHR0"
 .incbin "images/main.chr"
@@ -105,8 +110,20 @@ CellMasksInvert:
     .endrepeat
 
 PpuRows:
-    .repeat 32, i
+    .repeat 30, i
     .word $2000+(i*32)
+    .endrepeat
+
+; offset table
+CellRows:
+    .repeat 30, i
+    .byte i*4
+    .assert (i*4) < 256, error, "CellRows value overflow"
+    .endrepeat
+
+CellCols:
+    .repeat 32, i
+        .byte i/8
     .endrepeat
 
 ReadControllers:
@@ -153,10 +170,11 @@ NMI:
     lda #$FF
     sta Sleeping
 
-    lda BufferAddr+1
+    lda BufferReady
     bne :+
     jmp @noBuffer
 :
+    lda BufferAddr+1
     sta $2006
     lda BufferAddr+0
     sta $2006
@@ -166,11 +184,12 @@ NMI:
     sta $2007
     .endrepeat
 
-@noBuffer:
-
     lda #0
     sta BufferAddr+0
     sta BufferAddr+1
+    sta BufferReady
+
+@noBuffer:
 
     lda SwapReady
     beq :+
@@ -273,9 +292,6 @@ RESET:
     bne :-
 
 ; initial state
-; ..X
-; X.X
-; .XX
     lda TableSelect
     beq :+
     lda #.lobyte(SmTableA)
@@ -303,25 +319,65 @@ RESET:
     lda #1
     sta CurrentAlive
 
-    ldx #2
-    ldy #0
+; ..X
+; X.X
+; .XX
+    ldx #18
+    ldy #16
     jsr SetCell
 
-    ldx #2
-    ldy #1
+    ldx #18
+    ldy #17
     jsr SetCell
 
-    ldx #2
-    ldy #2
+    ldx #18
+    ldy #18
     jsr SetCell
 
-    ldx #1
-    ldy #2
+    ldx #17
+    ldy #18
     jsr SetCell
+
+    ldx #16
+    ldy #17
+    jsr SetCell
+
+    lda #$FF
+    sta TableSelect
+
+    lda #0
+    sta CoordX
+    sta CoordY
+
+@initloop:
+    jsr SmBuffer
+
+    lda BufferAddr+1
+    sta $2006
+    lda BufferAddr+0
+    sta $2006
 
     ldx #0
-    ldy #1
-    jsr SetCell
+:
+    lda TileBuffer, x
+    sta $2007
+    inx
+    cpx #32
+    bne :-
+
+    inc CoordY
+    lda CoordY
+    cmp #30
+    bne @initloop
+
+    lda #0
+    sta CoordY
+
+    lda #$00
+    sta TableSelect
+    sta BufferAddr+0
+    sta BufferAddr+1
+    sta SwapReady
 
     lda #$88
     sta $2000
@@ -329,9 +385,8 @@ RESET:
     lda #$0A
     sta $2001
 
-    lda #0
-    sta CoordX
-    sta CoordY
+    jsr WaitForNMI
+    jsr WaitForNMI
 
 ResetFrame:
     jsr SmUpdate
@@ -363,7 +418,6 @@ SmUpdate:
     lda #.hibyte(SmTableA)
     sta ptrCurrent+1
 :
-
 
 @chunkLoop:
     lda #0
@@ -540,24 +594,11 @@ SmUpdate:
 
 ; X&Y coordinates in X&Y registers
 GetCell:
-    ;lda CoordY ; CoordY*4
-    tya
-    asl a
-    asl a
-    tay ; start of row offset from beginning of table
-
-    ;lda CoordX ; CoordX/8
-    txa
-    lsr a
-    lsr a
-    lsr a
-    sta TmpX
-    tya
     clc
-    adc TmpX ; Offset of byte for current cell
+    lda CellRows, y
+    adc CellCols, x ; Offset of byte for current cell
     tay
 
-    ;lda CoorX
     txa
     and #$07 ; %0000_0111
     tax
@@ -568,28 +609,14 @@ GetCell:
 
 ; X&Y coordinates in X&Y registers
 SetCell:
-    ;lda CoordY ; CoordY*4
-    tya
-    asl a
-    asl a
-    tay ; start of row offset from beginning of table
-
-    ;lda CoordX ; CoordX/8
-    txa
-    lsr a
-    lsr a
-    lsr a
-    sta TmpX
-    tya
     clc
-    adc TmpX ; Offset of byte for current cell
+    lda CellRows, y
+    adc CellCols, x ; Offset of byte for current cell
     tay
 
-    ;lda CoorX
     txa
     and #$07 ; %0000_0111
     tax
-
 
     lda CurrentAlive
     beq @dead
@@ -615,10 +642,10 @@ SmBuffer:
     bpl :+
     ldy #29
 :
+    sty TmpB
 
     lda #0
     sta TmpA
-    sty TmpB
 
     tya
     asl a
@@ -678,4 +705,7 @@ SmBuffer:
     lda #1
     sta SwapReady
 :
+
+    lda #$FF
+    sta BufferReady
     rts
