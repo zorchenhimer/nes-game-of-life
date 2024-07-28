@@ -10,7 +10,8 @@ CAFLAGS = -g -t nes
 LDFLAGS = -C $(NESCFG) --dbgfile bin/$(NAME).dbg -m bin/$(NAME).map
 
 SOURCES = \
-	main.asm
+	main.asm \
+	neighbors.inc
 
 CHR = images/main.chr
 
@@ -33,3 +34,6 @@ images/%.chr: images/%.bmp
 
 images/%.bmp: images/%.aseprite
 	aseprite -b $< --save-as $@
+
+neighbors.inc: generate-neighbors.go
+	go run $<
