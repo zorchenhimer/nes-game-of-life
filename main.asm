@@ -97,8 +97,9 @@ SpriteSeed_0: .res 4
 SpriteSeed_1: .res 4
 SpriteSeed_2: .res 4
 SpriteSeed_3: .res 4
-
 SpriteSeed_Done: .res 4
+
+SpriteSel: .res 4
 .segment "BSS"
 
 SmTableA: .res 120
@@ -374,14 +375,8 @@ MenuInit:
     lda #'o'
     sta RngSeed+0
 
-    lda #' '
-    sta SpriteSeed_0+1
-    sta SpriteSeed_1+1
-    sta SpriteSeed_2+1
-    sta SpriteSeed_3+1
-    sta SpriteSeed_Done+1
-    sta SpriteSeedUp+1
-    sta SpriteSeedDown+1
+    jsr ClearScreen
+    jsr ClearSprites
 
     lda #$00
     sta $2003
@@ -437,6 +432,9 @@ MenuInit:
     sta $2005
     sta $2005
     sta MenuSelect
+
+    lda #$00
+    sta TableSelect
 
     lda #$80
     sta PpuControl
@@ -501,7 +499,7 @@ MenuItems:
     .byte $00
 
 MenuInits:
-    .word SimInit
+    .word SimInitRando
     .word EnterSeed
     .word EditInit
 
@@ -522,20 +520,7 @@ EnterSeed:
     sta PpuMask
     sta $2001
 
-    lda #$20
-    sta $2006
-    lda #$00
-    sta $2006
-
-    ldy #0
-    lda #0
-@loop:
-    sta $2007
-    sta $2007
-    sta $2007
-    sta $2007
-    iny
-    bne @loop
+    jsr ClearScreen
 
     lda #$34
     sta RngSeed+0
@@ -788,14 +773,14 @@ SeedFrame:
     cmp #4
     bne :+
     jsr WaitForNMI
-    jmp SimInit
+    jmp SimInitRando
 :
 
     lda Controller_Pressed
     and #BUTTON_START
     beq :+
     jsr WaitForNMI
-    jmp SimInit
+    jmp SimInitRando
 :
 
     lda Controller_Pressed
@@ -852,48 +837,184 @@ SeedVals:
     .word $0000
 
 EditInit:
-    brk
-    jmp EditInit
-
-SimInit:
-    jsr RandoField
     lda #$00
     sta PpuMask
     sta $2001
 
-    lda #$FF
-    sta TableSelect
+    jsr ClearScreen
+    jsr ClearSprites
+    jsr DrawInitTable
 
-    lda #0
+    lda #$82
+    sta SpriteSel+1
+
+    lda #10
     sta CoordX
-    lda #1
     sta CoordY
 
-    lda #$20
-    sta $2006
-    lda #$00
-    sta $2006
+    jsr WaitForNMI
 
-@initloop:
-    jsr SmBuffer
+    lda #.lobyte(SmTableA)
+    sta ptrCurrent+0
+    lda #.hibyte(SmTableA)
+    sta ptrCurrent+1
 
-    ;lda BufferAddr+1
-    ;sta $2006
-    ;lda BufferAddr+0
-    ;sta $2006
+    lda #.lobyte(SmTableA)
+    sta ptrNext+0
+    lda #.hibyte(SmTableA)
+    sta ptrNext+1
 
-    ldx #0
+    lda #$80
+    sta PpuControl
+    sta $2000
+
+    lda #$1E
+    sta PpuMask
+    sta $2001
+
+EditFrame:
+    jsr ReadControllers
+
+    lda Controller_Pressed
+    and #BUTTON_LEFT
+    beq :+
+    dec CoordX
+    lda CoordX
+    bpl :+
+    lda #31
+    sta CoordX
 :
-    lda TileBuffer, x
-    sta $2007
-    inx
-    cpx #32
-    bne :-
 
+    lda Controller_Pressed
+    and #BUTTON_RIGHT
+    beq :+
+    inc CoordX
+    lda CoordX
+    cmp #32
+    bne :+
+    lda #0
+    sta CoordX
+:
+
+    lda Controller_Pressed
+    and #BUTTON_UP
+    beq :+
+    dec CoordY
+    lda CoordY
+    bpl :+
+    lda #29
+    sta CoordY
+:
+
+    lda Controller_Pressed
+    and #BUTTON_DOWN
+    beq :+
     inc CoordY
     lda CoordY
     cmp #30
-    bne @initloop
+    bne :+
+    lda #0
+    sta CoordY
+:
+
+    lda Controller_Pressed
+    and #BUTTON_A
+    beq @noA
+    ldy CoordY
+    ldx CoordX
+    jsr ToggleCell
+@noA:
+
+    lda Controller_Pressed
+    and #BUTTON_LEFT|BUTTON_RIGHT|BUTTON_UP|BUTTON_DOWN
+    beq :+
+    lda Controller
+    and #BUTTON_A
+    beq :+
+    ldy CoordY
+    ldx CoordX
+    jsr ToggleCell
+
+:
+
+    lda Controller_Pressed
+    and #BUTTON_B
+    beq :+
+    jsr WaitForNMI
+    jmp MenuInit
+:
+
+    lda Controller_Pressed
+    and #BUTTON_START
+    beq :+
+    jsr WaitForNMI
+    jmp SimInit
+:
+
+    ldx CoordX
+    lda SelCols, x
+    sta SpriteSel+3
+
+    ldx CoordY
+    lda SelRows, x
+    sta SpriteSel+0
+
+    jsr WaitForNMI
+
+    lda CoordY
+    asl a
+    tax
+    lda PpuRows+0, x
+    clc
+    adc CoordX
+    sta TmpA
+
+    lda PpuRows+1, x
+    adc #0
+    bit $2002
+    sta $2006
+    lda TmpA
+    sta $2006
+
+    ldy CoordY
+    ldx CoordX
+    jsr GetCell
+    beq :+
+    lda #1
+    sta $2007
+    jmp :++
+:
+    lda #0
+    sta $2007
+:
+
+    lda #0
+    sta $2005
+    sta $2005
+
+    jmp EditFrame
+
+SelRows:
+    .byte 0
+    .repeat 29, i
+    .byte (((i+1)*8)-1) & $FF
+    .endrepeat
+
+SelCols:
+    .repeat 32, i
+    .byte i*8
+    .endrepeat
+
+SimInitRando:
+    jsr RandoField
+
+SimInit:
+    lda #$00
+    sta PpuMask
+    sta $2001
+
+    jsr ClearSprites
+    jsr DrawInitTable
 
     lda #0
     sta CoordY
@@ -916,11 +1037,37 @@ SimInit:
     jsr WaitForNMI
 
 SimFrame:
+    jsr ReadControllers
+    lda Controller_Pressed
+    and #BUTTON_B
+    beq :+
+    jsr CopyBtoA
+    jsr WaitForNMI
+    jmp MenuInit
+:
+
     jsr SmUpdate_Redo
     ;jsr SmUpdate
     jsr SmBuffer
     jsr WaitForNMI
     jmp SimFrame
+
+CopyBtoA:
+    lda TableSelect
+    bne :+
+    rts
+:
+
+    ldx #120-1
+:
+    lda SmTableB, x
+    sta SmTableA, x
+    dex
+    lda SmTableB, x
+    sta SmTableA, x
+    dex
+    bpl :-
+    rts
 
 SmUpdate_Redo:
     lda TableSelect
@@ -1403,6 +1550,27 @@ SetCell:
     sta (ptrNext), y
     rts
 
+ToggleCell:
+    clc
+    lda CellRows, y
+    adc CellCols, x ; Offset of byte for current cell
+    tay
+
+    txa
+    and #$07 ; %0000_0111
+    tax
+
+    lda (ptrCurrent), y
+    and CellMasksInvert, x
+    sta TmpX
+
+    lda (ptrCurrent), y
+    eor #$FF
+    and CellMasks, x
+    ora TmpX
+    sta (ptrCurrent), y
+    rts
+
 TileON  = $01
 TileOFF = $00
 SmBuffer:
@@ -1539,6 +1707,68 @@ RandoField:
     inx
     cpx #120
     bne @byte
+    rts
+
+ClearSprites:
+    lda #' '
+    sta SpriteSeed_0+1
+    sta SpriteSeed_1+1
+    sta SpriteSeed_2+1
+    sta SpriteSeed_3+1
+    sta SpriteSeed_Done+1
+    sta SpriteSeedUp+1
+    sta SpriteSeedDown+1
+    sta SpriteZero+1
+    sta SpriteSel+1
+    rts
+
+DrawInitTable:
+    lda #$FF
+    sta TableSelect
+
+    lda #0
+    sta CoordX
+    lda #1
+    sta CoordY
+
+    lda #$20
+    sta $2006
+    lda #$00
+    sta $2006
+
+@initloop:
+    jsr SmBuffer
+    ldx #0
+:
+    lda TileBuffer, x
+    sta $2007
+    inx
+    cpx #32
+    bne :-
+
+    inc CoordY
+    lda CoordY
+    cmp #30
+    bne @initloop
+    lda #$00
+    sta TableSelect
+    rts
+
+ClearScreen:
+    lda #$20
+    sta $2006
+    lda #$00
+    sta $2006
+
+    ldy #0
+    lda #0
+@loop:
+    sta $2007
+    sta $2007
+    sta $2007
+    sta $2007
+    iny
+    bne @loop
     rts
 
 NeighborBytes:
