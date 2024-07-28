@@ -83,8 +83,22 @@ BufferAddr:  .res 2
 TileBuffer:  .res 32
 
 RngSeed: .res 2
+PpuControl: .res 1
+PpuMask: .res 1
+MenuSelect: .res 1
 
 .segment "OAM"
+SpriteZero: .res 4
+
+SpriteSeedUp:   .res 4
+SpriteSeedDown: .res 4
+
+SpriteSeed_0: .res 4
+SpriteSeed_1: .res 4
+SpriteSeed_2: .res 4
+SpriteSeed_3: .res 4
+
+SpriteSeed_Done: .res 4
 .segment "BSS"
 
 SmTableA: .res 120
@@ -157,6 +171,15 @@ ReadControllers:
     sta Controller_Pressed ; 0000
     rts
 
+WaitForNMI_Menu:
+    lda #0
+    sta Sleeping
+:
+    jsr prng
+    bit Sleeping
+    bpl :-
+    rts
+
 WaitForNMI:
     lda #0
     sta Sleeping
@@ -176,6 +199,15 @@ NMI:
 
     lda #$FF
     sta Sleeping
+
+    lda PpuMask
+    and #$10
+    beq @noSprites
+    lda #$00
+    sta $2003
+    lda #$02
+    sta $4014
+@noSprites:
 
     lda BufferReady
     bne :+
@@ -209,11 +241,16 @@ NMI:
 
     lda TableSelect
     bne @tableB
-    lda #$88
+    lda PpuControl
+    and #$FE
+    sta PpuControl
     sta $2000
     jmp @selectDone
 @tableB:
     lda #$89
+    lda PpuControl
+    ora #$01
+    sta PpuControl
     sta $2000
 @selectDone:
 
@@ -299,33 +336,6 @@ RESET:
     bne :-
 
 ; initial state
-    lda TableSelect
-    beq :+
-    lda #.lobyte(SmTableA)
-    sta ptrCurrent+0
-    lda #.hibyte(SmTableA)
-    sta ptrCurrent+1
-
-    lda #.lobyte(SmTableB)
-    sta ptrNext+0
-    lda #.hibyte(SmTableB)
-    sta ptrNext+1
-    jmp :++
-:
-    lda #.lobyte(SmTableA)
-    sta ptrNext+0
-    lda #.hibyte(SmTableA)
-    sta ptrNext+1
-
-    lda #.lobyte(SmTableB)
-    sta ptrCurrent+0
-    lda #.hibyte(SmTableB)
-    sta ptrCurrent+1
-:
-
-    lda #1
-    sta CurrentAlive
-
 ; ..X
 ; X.X
 ; .XX
@@ -350,26 +360,527 @@ RESET:
 ;    ldy #17
 ;    jsr SetCell
 
+MenuStart = $218B
+MenuCursor = $0F
+MenuSize = 3
+
+MenuInit:
+    lda #$00
+    sta PpuMask
+    sta $2001
+
     lda #'Z'
     sta RngSeed+1
     lda #'o'
     sta RngSeed+0
+
+    lda #' '
+    sta SpriteSeed_0+1
+    sta SpriteSeed_1+1
+    sta SpriteSeed_2+1
+    sta SpriteSeed_3+1
+    sta SpriteSeed_Done+1
+    sta SpriteSeedUp+1
+    sta SpriteSeedDown+1
+
+    lda #$00
+    sta $2003
+    lda #$02
+    sta $4014
+
+    lda #.lobyte(MenuStart)
+    sta ptrCurrent+0
+    lda #.hibyte(MenuStart)
+    sta ptrCurrent+1
+
+    ldx #$FF
+@loopOuter:
+    lda ptrCurrent+1
+    sta $2006
+    lda ptrCurrent+0
+    sta $2006
+
+    inx
+    lda MenuItems, x
+    beq @menuDone
+
+    sta $2007
+@loopInner:
+    inx
+    lda MenuItems, x
+    beq @menuNext
+    sta $2007
+    jmp @loopInner
+
+@menuNext:
+    clc
+    lda ptrCurrent+0
+    adc #64
+    sta ptrCurrent+0
+
+    lda ptrCurrent+1
+    adc #0
+    sta ptrCurrent+1
+    jmp @loopOuter
+
+@menuDone:
+
+    lda #MenuCursor
+    sta SpriteZero+1
+
+    lda #72
+    sta SpriteZero+3
+    lda #96
+    sta SpriteZero+0
+
+    lda #0
+    sta $2005
+    sta $2005
+    sta MenuSelect
+
+    lda #$80
+    sta PpuControl
+    sta $2000
+
+    lda #$1A
+    sta PpuMask
+    sta $2001
+
+    jsr WaitForNMI
+    jsr WaitForNMI
+
+MenuFrame:
+    jsr ReadControllers
+
+    lda Controller_Pressed
+    and #BUTTON_A | BUTTON_START
+    beq @noStart
+    lda MenuSelect
+    asl a
+    tax
+    lda MenuInits+0, x
+    sta ptrCurrent+0
+    lda MenuInits+1, x
+    sta ptrCurrent+1
+    jmp (ptrCurrent)
+@noStart:
+
+    lda Controller_Pressed
+    and #BUTTON_SELECT | BUTTON_DOWN
+    beq @noDown
+    inc MenuSelect
+    lda MenuSelect
+    cmp #3
+    bne :+
+    lda #0
+    sta MenuSelect
+:
+    jmp @menuDone
+@noDown:
+
+    lda Controller_Pressed
+    and #BUTTON_UP
+    beq @menuDone
+    dec MenuSelect
+    bpl @menuDone
+    lda #2
+    sta MenuSelect
+
+@menuDone:
+    ldx MenuSelect
+    lda MenuCursorLocs, x
+    sta SpriteZero+0
+
+    jsr WaitForNMI_Menu
+    jmp MenuFrame
+
+MenuItems:
+    .asciiz "Random Seed"
+    .asciiz "Enter Seed"
+    .asciiz "Edit Board"
+    .byte $00
+
+MenuInits:
+    .word SimInit
+    .word EnterSeed
+    .word EditInit
+
+MenuCursorLocs:
+    .byte 95+(16*0)
+    .byte 95+(16*1)
+    .byte 95+(16*2)
+
+; Tiles
+SeedUp   = $81
+SeedDown = $80
+SeedStart = $21CC
+
+EnterSeed:
+    jsr WaitForNMI
+
+    lda #$00
+    sta PpuMask
+    sta $2001
+
+    lda #$20
+    sta $2006
+    lda #$00
+    sta $2006
+
+    ldy #0
+    lda #0
+@loop:
+    sta $2007
+    sta $2007
+    sta $2007
+    sta $2007
+    iny
+    bne @loop
+
+    lda #$34
+    sta RngSeed+0
+    lda #$12
+    sta RngSeed+1
+
+    lda #' '
+    sta SpriteZero+1
+
+    lda #$00
+    sta $2003
+    lda #$02
+    sta $4014
+
+    lda #'>'
+    sta SpriteSeed_Done+1
+
+    lda #SeedUp
+    sta SpriteSeedUp+1
+    lda #SeedDown
+    sta SpriteSeedDown+1
+
+    lda #95
+    sta SpriteSeedUp+3
+    sta SpriteSeedDown+3
+
+    lda #102
+    sta SpriteSeedUp+0
+    lda #120
+    sta SpriteSeedDown+0
+
+    lda #111
+    sta SpriteSeed_0+0
+    sta SpriteSeed_1+0
+    sta SpriteSeed_2+0
+    sta SpriteSeed_3+0
+    sta SpriteSeed_Done+0
+
+    lda SeedPositions+0
+    sta SpriteSeed_0+3
+    lda SeedPositions+1
+    sta SpriteSeed_1+3
+    lda SeedPositions+2
+    sta SpriteSeed_2+3
+    lda SeedPositions+3
+    sta SpriteSeed_3+3
+    lda SeedPositions+4
+    sta SpriteSeed_Done+3
+
+    lda #0
+    sta MenuSelect
+
+    jsr WaitForNMI
+
+    lda #$80
+    sta PpuControl
+    sta $2000
+
+    lda #$1A
+    sta PpuMask
+    sta $2001
+
+SeedFrame:
+    jsr ReadControllers
+
+    lda Controller_Pressed
+    and #BUTTON_UP
+    beq @noUp
+    lda MenuSelect
+    cmp #0
+    bne :+
+    lda RngSeed+1
+    lsr a
+    lsr a
+    lsr a
+    lsr a
+    clc
+    adc #1
+    asl a
+    asl a
+    asl a
+    asl a
+    tax
+    lda RngSeed+1
+    and #$0F
+    sta RngSeed+1
+    txa
+    ora RngSeed+1
+    sta RngSeed+1
+    jmp @noUp
+:
+    cmp #1
+    bne :+
+    lda RngSeed+1
+    and #$0F
+    clc
+    adc #1
+    and #$0F
+    tax
+    lda RngSeed+1
+    and #$F0
+    sta RngSeed+1
+    txa
+    ora RngSeed+1
+    sta RngSeed+1
+    jmp @noUp
+:
+    cmp #2
+    bne :+
+    lda RngSeed+0
+    lsr a
+    lsr a
+    lsr a
+    lsr a
+    clc
+    adc #1
+    asl a
+    asl a
+    asl a
+    asl a
+    tax
+    lda RngSeed+0
+    and #$0F
+    sta RngSeed+0
+    txa
+    ora RngSeed+0
+    sta RngSeed+0
+    jmp @noUp
+:
+    cmp #3
+    bne @noUp
+    lda RngSeed+0
+    and #$0F
+    clc
+    adc #1
+    and #$0F
+    tax
+    lda RngSeed+0
+    and #$F0
+    sta RngSeed+0
+    txa
+    ora RngSeed+0
+    sta RngSeed+0
+@noUp:
+
+    lda Controller_Pressed
+    and #BUTTON_DOWN
+    beq @noDown
+    lda MenuSelect
+    cmp #0
+    bne :+
+    lda RngSeed+1
+    lsr a
+    lsr a
+    lsr a
+    lsr a
+    sec
+    sbc #1
+    asl a
+    asl a
+    asl a
+    asl a
+    tax
+    lda RngSeed+1
+    and #$0F
+    sta RngSeed+1
+    txa
+    ora RngSeed+1
+    sta RngSeed+1
+    jmp @noDown
+:
+    cmp #1
+    bne :+
+    lda RngSeed+1
+    and #$0F
+    sec
+    sbc #1
+    and #$0F
+    tax
+    lda RngSeed+1
+    and #$F0
+    sta RngSeed+1
+    txa
+    ora RngSeed+1
+    sta RngSeed+1
+    jmp @noDown
+:
+    cmp #2
+    bne :+
+    lda RngSeed+0
+    lsr a
+    lsr a
+    lsr a
+    lsr a
+    sec
+    sbc #1
+    asl a
+    asl a
+    asl a
+    asl a
+    tax
+    lda RngSeed+0
+    and #$0F
+    sta RngSeed+0
+    txa
+    ora RngSeed+0
+    sta RngSeed+0
+    jmp @noDown
+:
+    cmp #3
+    bne @noDown
+    lda RngSeed+0
+    and #$0F
+    sec
+    sbc #1
+    and #$0F
+    tax
+    lda RngSeed+0
+    and #$F0
+    sta RngSeed+0
+    txa
+    ora RngSeed+0
+    sta RngSeed+0
+@noDown:
+
+    lda Controller_Pressed
+    and #BUTTON_LEFT | BUTTON_SELECT
+    beq :+
+    dec MenuSelect
+    bpl :+
+    lda #4
+    sta MenuSelect
+:
+
+    lda Controller_Pressed
+    and #BUTTON_RIGHT
+    beq :+
+    inc MenuSelect
+    lda MenuSelect
+    cmp #5
+    bne :+
+    lda #0
+    sta MenuSelect
+:
+
+    lda Controller_Pressed
+    and #BUTTON_A
+    beq :+
+    lda MenuSelect
+    cmp #4
+    bne :+
+    jsr WaitForNMI
+    jmp SimInit
+:
+
+    lda Controller_Pressed
+    and #BUTTON_START
+    beq :+
+    jsr WaitForNMI
+    jmp SimInit
+:
+
+    lda Controller_Pressed
+    and #BUTTON_B
+    beq :+
+    jsr WaitForNMI
+    jmp MenuInit
+:
+
+    lda RngSeed+1
+    lsr a
+    lsr a
+    lsr a
+    lsr a
+    ora #$F0
+    sta SpriteSeed_0+1
+
+    lda RngSeed+1
+    ora #$F0
+    sta SpriteSeed_1+1
+
+    lda RngSeed+0
+    lsr a
+    lsr a
+    lsr a
+    lsr a
+    ora #$F0
+    sta SpriteSeed_2+1
+
+    lda RngSeed+0
+    ora #$F0
+    sta SpriteSeed_3+1
+
+    ldx MenuSelect
+    lda SeedPositions, x
+    sta SpriteSeedUp+3
+    sta SpriteSeedDown+3
+
+    jsr WaitForNMI
+    jmp SeedFrame
+
+SeedPositions:
+    .byte 96+(16*0)
+    .byte 96+(16*1)
+    .byte 96+(16*2)
+    .byte 96+(16*3)
+    .byte 96+(16*4)
+
+SeedVals:
+    .word RngSeed+0
+    .word RngSeed+0
+    .word RngSeed+1
+    .word RngSeed+1
+    .word $0000
+
+EditInit:
+    brk
+    jmp EditInit
+
+SimInit:
     jsr RandoField
+    lda #$00
+    sta PpuMask
+    sta $2001
 
     lda #$FF
     sta TableSelect
 
     lda #0
     sta CoordX
+    lda #1
     sta CoordY
+
+    lda #$20
+    sta $2006
+    lda #$00
+    sta $2006
 
 @initloop:
     jsr SmBuffer
 
-    lda BufferAddr+1
-    sta $2006
-    lda BufferAddr+0
-    sta $2006
+    ;lda BufferAddr+1
+    ;sta $2006
+    ;lda BufferAddr+0
+    ;sta $2006
 
     ldx #0
 :
@@ -393,21 +904,23 @@ RESET:
     sta BufferAddr+1
     sta SwapReady
 
-    lda #$88
+    lda #$80
+    sta PpuControl
     sta $2000
 
     lda #$0A
+    sta PpuMask
     sta $2001
 
     jsr WaitForNMI
     jsr WaitForNMI
 
-ResetFrame:
+SimFrame:
     jsr SmUpdate_Redo
     ;jsr SmUpdate
     jsr SmBuffer
     jsr WaitForNMI
-    jmp ResetFrame
+    jmp SimFrame
 
 SmUpdate_Redo:
     lda TableSelect
