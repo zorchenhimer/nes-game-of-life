@@ -82,6 +82,8 @@ BufferReady: .res 1
 BufferAddr:  .res 2
 TileBuffer:  .res 32
 
+RngSeed: .res 2
+
 .segment "OAM"
 .segment "BSS"
 
@@ -327,25 +329,32 @@ RESET:
 ; ..X
 ; X.X
 ; .XX
-    ldx #18
-    ldy #16
-    jsr SetCell
 
-    ldx #18
-    ldy #17
-    jsr SetCell
+;    ldx #18
+;    ldy #16
+;    jsr SetCell
+;
+;    ldx #18
+;    ldy #17
+;    jsr SetCell
+;
+;    ldx #18
+;    ldy #18
+;    jsr SetCell
+;
+;    ldx #17
+;    ldy #18
+;    jsr SetCell
+;
+;    ldx #16
+;    ldy #17
+;    jsr SetCell
 
-    ldx #18
-    ldy #18
-    jsr SetCell
-
-    ldx #17
-    ldy #18
-    jsr SetCell
-
-    ldx #16
-    ldy #17
-    jsr SetCell
+    lda #'Z'
+    sta RngSeed+1
+    lda #'o'
+    sta RngSeed+0
+    jsr RandoField
 
     lda #$FF
     sta TableSelect
@@ -976,6 +985,47 @@ SmBuffer:
 
     lda #$FF
     sta BufferReady
+    rts
+
+prng:
+    ldy #8  ; iteration count (generates 8 bits)
+    lda RngSeed
+    bne @one
+    ;lda seed_ram
+
+@one:
+    asl a    ; shift the register
+    rol RngSeed+1
+    bcc @two
+    ; Apply XOR feedback whenever a 1 bit is shifted out
+    eor #$2D
+@two:
+
+    dey
+    bne @one    ; generate another bit
+
+    sta RngSeed
+    cmp #0  ; reload flags
+    rts
+
+RandoField:
+    ldx #0
+@byte:
+
+    lda #8
+    sta TmpA
+@inner:
+    jsr prng
+    lda RngSeed+1
+    cmp #256-40
+    ror SmTableA, x
+
+    dec TmpA
+    bne @inner
+
+    inx
+    cpx #120
+    bne @byte
     rts
 
 NeighborBytes:
