@@ -210,6 +210,11 @@ NMI:
     sta $4014
 @noSprites:
 
+    lda PpuMask
+    and #$08
+    bne :+
+    jmp @noBuffer
+:
     lda BufferReady
     bne :+
     jmp @noBuffer
@@ -361,9 +366,9 @@ RESET:
 ;    ldy #17
 ;    jsr SetCell
 
-MenuStart = $218B
+MenuStart = $216B
 MenuCursor = $0F
-MenuSize = 3
+MenuSize = 4
 
 MenuInit:
     lda #$00
@@ -425,7 +430,7 @@ MenuInit:
 
     lda #72
     sta SpriteZero+3
-    lda #96
+    lda MenuCursorLocs+0
     sta SpriteZero+0
 
     lda #0
@@ -468,7 +473,7 @@ MenuFrame:
     beq @noDown
     inc MenuSelect
     lda MenuSelect
-    cmp #3
+    cmp #MenuSize
     bne :+
     lda #0
     sta MenuSelect
@@ -481,7 +486,7 @@ MenuFrame:
     beq @menuDone
     dec MenuSelect
     bpl @menuDone
-    lda #2
+    lda #MenuSize-1
     sta MenuSelect
 
 @menuDone:
@@ -496,22 +501,38 @@ MenuItems:
     .asciiz "Random Seed"
     .asciiz "Enter Seed"
     .asciiz "Edit Board"
+    .asciiz "Clear Board"
     .byte $00
 
 MenuInits:
     .word SimInitRando
     .word EnterSeed
     .word EditInit
+    .word ClearBoard
 
 MenuCursorLocs:
-    .byte 95+(16*0)
-    .byte 95+(16*1)
-    .byte 95+(16*2)
+    .repeat MenuSize, i
+    .byte 87+(16*i)
+    .endrepeat
 
 ; Tiles
 SeedUp   = $81
 SeedDown = $80
 SeedStart = $21CC
+
+ClearBoard:
+    ldx #120-1
+    lda #0
+:
+    sta SmTableA, x
+    dex
+    sta SmTableA, x
+    dex
+    bpl :-
+
+    jsr WaitForNMI
+    jmp MenuFrame
+    rts
 
 EnterSeed:
     jsr WaitForNMI
